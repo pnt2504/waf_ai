@@ -23,13 +23,19 @@ MALICIOUS_UPLOAD_EXTS = [
 ]
 
 # --- 3. TỪ ĐIỂN TỪ KHÓA ---
+# Từ SQL ngắn: khớp có ranh giới (tránh "insert" trong tham số fuzz / từ ghép vô hại)
+SQLI_BOUNDARY_KEYWORDS = [
+    'select', 'union', 'insert', 'update', 'delete', 'drop', 'from', 'where',
+]
+# Chuỗi / toán tử SQL: giữ khớp substring (không dùng ';' đơn lẻ — trùng Accept;q=...)
+SQLI_LITERAL_KEYWORDS = [
+    'create table', 'alter table', 'truncate table', '--', '#', '/*', '*/', '%00',
+    '1=1', 'or 1=1', 'and 1=1', 'or true', 'or 1=1--', 'version()', 'database()',
+    'user()', '@@version', 'sleep(', 'benchmark(', 'delay(', 'waitfor', 'concat(',
+]
+
 ATTACK_KEYWORDS = {
-    'sqli': [
-        'select', 'union', 'insert', 'update', 'delete', 'drop', 'from', 'where', 
-        'create table', 'alter table', 'truncate table', '--', '#', '/*', '*/', ';', '%00',
-        '1=1', 'or 1=1', 'and 1=1', 'or true', 'or 1=1--', 'version()', 'database()', 
-        'user()', '@@version', 'sleep(', 'benchmark(', 'delay(', 'waitfor', 'concat('
-    ],
+    'sqli': SQLI_BOUNDARY_KEYWORDS + SQLI_LITERAL_KEYWORDS,
     'xss': [
         '<script', '</script>', '<img', '<svg', '<body', '<iframe', 'onload', 'onerror', 
         'onclick', 'javascript:', 'vbscript:', 'document.cookie', 'alert(', 'prompt(',
@@ -41,9 +47,10 @@ ATTACK_KEYWORDS = {
         # Bổ sung các mục tiêu dò quét LFI / Path
         'win.ini', 'file:/', 'c:/windows', 'c:\\windows', 'inetpub', 'wwwroot', 'global.asa'
     ],
+    # Không dùng ';', '|', '&' đơn lẻ: mọi query có & nối tham số sẽ bị tính nhầm
     'cmd_injection': [
-        ';', '|', '&', '&&', '||', '`', '$()', '/bin/sh', 'cmd.exe', 'powershell',
-        'wget', 'curl', 'ping', 'whoami', 'cat ', 'grep', 'rm -rf'
+        '&&', '||', '`', '$()', '/bin/sh', 'cmd.exe', 'powershell',
+        'wget', 'curl', 'ping', 'whoami', 'cat ', 'grep', 'rm -rf',
     ],
     'php_injection': [
         'php://input', 'php://filter', 'expect://', 'data://', 'exec(', 'system(', 'shell_exec('
@@ -82,6 +89,33 @@ def count_keywords(text, keyword_list):
         if kw in text_lower:
             count += 1
     return count
+
+def count_sqli_keywords(text):
+    if not text:
+        return 0
+    t = urllib.parse.unquote(str(text)).lower()
+    count = 0
+    boundary = r'(?<![a-z0-9_])%s(?![a-z0-9_])'
+    for w in SQLI_BOUNDARY_KEYWORDS:
+        if re.search(boundary % re.escape(w), t):
+            count += 1
+    for kw in SQLI_LITERAL_KEYWORDS:
+        if kw in t:
+            count += 1
+    return count
+
+def header_anomaly_score(headers):
+    if not isinstance(headers, dict):
+        return 0
+    score = 0
+    for key in ('user_agent', 'pragma', 'connection', 'referer'):
+        v = str(headers.get(key, '')).strip().lower()
+        if v == 'invalid':
+            score += 1
+    ua = str(headers.get('user_agent', '')).strip()
+    if ua and len(ua) < 12:
+        score += 1
+    return score
 
 def check_critical_extension(url):
     try:
@@ -122,8 +156,10 @@ def extract_features_v5(entry):
             effective_payload = url.split('?', 1)[1]
         except:
             effective_payload = ""
-            
-    full_text = f"{url} {effective_payload} {str(headers)}"
+    
+    # Chỉ quét injection trên URL + phần tham số/payload — không dùng headers (tránh ; trong Accept;q=)
+    injection_text = f"{url} {effective_payload}"
+    header_anomaly = header_anomaly_score(headers)
     input_len = len(effective_payload)
     
     # Ratios
@@ -147,13 +183,13 @@ def extract_features_v5(entry):
     if special_ratio > 0:
         raw_ratio = alpha_ratio / special_ratio
 
-    # Keywords
-    sqli_count = count_keywords(full_text, ATTACK_KEYWORDS['sqli'])
-    xss_count = count_keywords(full_text, ATTACK_KEYWORDS['xss'])
-    path_count = count_keywords(full_text, ATTACK_KEYWORDS['path_traversal'])
-    cmd_count = count_keywords(full_text, ATTACK_KEYWORDS['cmd_injection'])
-    php_count = count_keywords(full_text, ATTACK_KEYWORDS['php_injection'])
-    probing_kw_count = count_keywords(full_text, ATTACK_KEYWORDS['probing'])
+    # Keywords (chỉ injection_text)
+    sqli_count = count_sqli_keywords(injection_text)
+    xss_count = count_keywords(injection_text, ATTACK_KEYWORDS['xss'])
+    path_count = count_keywords(injection_text, ATTACK_KEYWORDS['path_traversal'])
+    cmd_count = count_keywords(injection_text, ATTACK_KEYWORDS['cmd_injection'])
+    php_count = count_keywords(injection_text, ATTACK_KEYWORDS['php_injection'])
+    probing_kw_count = count_keywords(injection_text, ATTACK_KEYWORDS['probing'])
     
     # Quyết định bằng URL
     is_critical_ext = check_critical_extension(url)
@@ -200,19 +236,24 @@ def extract_features_v5(entry):
         url_penalty += 300
     if re.search(r'\d{10,}\.(jsp|php)', url_lower):
         url_penalty += 300
+
+    method_upper = str(method).upper()
+    uncommon_method = 1 if method_upper not in ('GET', 'POST') else 0
     
-    # TỔNG TÍNH Z
+    # TỔNG TÍNH Z (cộng thêm tín hiệu header bất thường — CSIC thường gắn attack với UA/pragma lạ)
     z = (sqli_count * WEIGHTS['sqli']) + (xss_count * WEIGHTS['xss']) + \
         (path_count * WEIGHTS['path']) + (cmd_count * WEIGHTS['cmd']) + \
         (php_count * WEIGHTS['php_injection']) + \
         (probing_kw_count * WEIGHTS['probing']) + \
-        critical_score + files_weight + url_penalty + manipulate_weight
+        critical_score + files_weight + url_penalty + manipulate_weight + \
+        (header_anomaly * 220) + (uncommon_method * 180)
 
     return [input_len, alpha_ratio, special_ratio, raw_ratio, z, 
             sqli_count, xss_count, path_count, cmd_count, php_count, probing_kw_count,
             param_count, max_param_len, 
             uppercase_ratio, digit_ratio, entropy_score,
-            critical_score, is_critical_ext, files_weight, url_penalty, manipulate_weight] 
+            critical_score, is_critical_ext, files_weight, url_penalty, manipulate_weight,
+            header_anomaly, uncommon_method] 
 
 def main():
     print("Đang đọc và xử lý dữ liệu...")
@@ -244,11 +285,13 @@ def main():
     
     indices = np.arange(len(X))
     X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
-        X, y, indices, test_size=0.2, random_state=42
+        X, y, indices, test_size=0.2, random_state=42, stratify=y
     )
     
-    print("\n--- HUẤN LUYỆN VỚI RANDOM FOREST (V5.1 - TỐI ƯU MANIPULATE WEIGHT) ---")
-    rf_model = RandomForestClassifier(n_estimators=300, max_depth=30, random_state=42)
+    print("\n--- HUẤN LUYỆN VỚI RANDOM FOREST (V5.2 - GIẢM NHIỄU HEADER + CÂN LỚP) ---")
+    rf_model = RandomForestClassifier(
+        n_estimators=300, max_depth=30, random_state=42, class_weight='balanced'
+    )
     rf_model.fit(X_train, y_train)
     
     y_pred = rf_model.predict(X_test)
@@ -257,24 +300,50 @@ def main():
     print(f"Random Forest Accuracy: {acc*100:.2f}%")
     print(classification_report(y_test, y_pred))
     
-    print("\n--- KIỂM TRA LỖI CÒN SÓT (TOP 5) ---")
+    print("\n--- TRÍCH XUẤT VÀ LƯU CÁC LỖI BỎ LỌT (FALSE NEGATIVES) ---")
     count_err = 0
+    missed_attacks_data = []
+    
+    # Danh sách tên các feature tương ứng với hàm extract_features_v5
+    feature_names = [
+        "input_len", "alpha_ratio", "special_ratio", "raw_ratio", "z_score", 
+        "sqli_count", "xss_count", "path_count", "cmd_count", "php_count", "probing_kw_count",
+        "param_count", "max_param_len", "uppercase_ratio", "digit_ratio", "entropy_score",
+        "critical_score", "is_critical_ext", "files_weight", "url_penalty", "manipulate_weight",
+        "header_anomaly", "uncommon_method",
+    ]
+
     for i in range(len(y_test)):
+        # y_test = 1 (Thực tế là tấn công), y_pred = 0 (Model đoán là an toàn)
         if y_test[i] == 1 and y_pred[i] == 0:
-            if count_err < 5:
-                original_idx = idx_test[i]
-                entry = raw_entries[original_idx]
-                print(f"Missed Attack #{count_err+1}:")
-                print(f"  URL: {entry.get('url')}")
-                print(f"  Payload: {entry.get('payload')}")
-                print("-" * 50)
+            original_idx = idx_test[i]
+            entry = raw_entries[original_idx]
+            features_array = X_test[i]
+            
+            # Map giá trị với tên feature tương ứng
+            extracted_features = dict(zip(feature_names, features_array))
+            
+            # Đóng gói dữ liệu
+            missed_info = {
+                "raw_request": entry,
+                "extracted_features": extracted_features
+            }
+            missed_attacks_data.append(missed_info)
             count_err += 1
             
-    print(f"\nTổng số tấn công bị bỏ lọt: {count_err} / {sum(y_test)}")
+    print(f"Tổng số tấn công bị bỏ lọt: {count_err} / {sum(y_test == 1)}")
     
-    with open('waf_model_final_v5.pkl', 'wb') as f:
+    # Lưu ra file json
+    if count_err > 0:
+        output_file = 'missed_attacks.json'
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            json.dump(missed_attacks_data, outfile, ensure_ascii=False, indent=4)
+        print(f"Đã xuất chi tiết toàn bộ các request bỏ lọt vào file: {output_file}")
+    
+    # Lưu model
+    with open('waf_model_final_v6.pkl', 'wb') as f:
         pickle.dump(rf_model, f)
-    print("Đã lưu model V5.1.")
+    print("Đã lưu model V5.2.")
 
 if __name__ == "__main__":
     main()
