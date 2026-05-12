@@ -1,0 +1,75 @@
+# =============================================================================
+# WAF ML Lab — Docker Compose
+# Chạy từ thư mục lab/:   docker compose up -d
+#
+# Kiến trúc:
+#   Client → nginx:80 ──auth_request──► waf:8000/auth (RandomForest)
+#                    └── 200 NORMAL ──► backend:5000
+#                    └── 403 ATTACK ──► JSON blocked trả về client
+# =============================================================================
+
+services:
+
+  # ─── Nginx: reverse proxy + auth_request gateway ─────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: lab-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/waf.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/logs:/var/log/nginx
+    depends_on:
+      waf:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks:
+      - waf-net
+    restart: unless-stopped
+
+  # ─── WAF: FastAPI server chạy ML model (RandomForest) ────────────────────
+  waf:
+    build:
+      context: ..                          # project root — để COPY features/, config/, *.pkl
+      dockerfile: lab/waf_server/Dockerfile
+    container_name: lab-waf
+    ports:
+      - "8000:8000"                        # expose để test trực tiếp không qua Nginx
+    environment:
+      # Đổi WAF_MODEL_PATH để thử model khác:
+      #   waf_model_baseline.pkl
+      #   waf_model_final_v5.pkl
+      #   waf_model_final_v6.pkl  ← mặc định
+      #   waf_model_xgboost_v2.pkl
+      WAF_MODEL_PATH: "/app/waf_model_final_v6.pkl"
+      WAF_THRESHOLD:  "0.50"
+      WAF_HOST:       "0.0.0.0"
+      WAF_PORT:       "8000"
+    volumes:
+      - ./waf_server/logs:/app/waf_server/logs
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - waf-net
+    restart: unless-stopped
+
+  # ─── Backend: app demo đứng sau WAF ──────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    container_name: lab-backend
+    ports:
+      - "5001:5000"                     # port 5001 để test bypass WAF trực tiếp
+    networks:
+      - waf-net
+    restart: unless-stopped
+
+networks:
+  waf-net:
+    driver: bridge

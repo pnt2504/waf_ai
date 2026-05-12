@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>WAF Model Test Server</title>
+<style>
+  :root { --bg:#0e1116; --card:#161b22; --border:#30363d; --text:#e6edf3;
+          --muted:#8b949e; --accent:#2f81f7; --ok:#3fb950; --bad:#f85149; }
+  body { background:var(--bg); color:var(--text); font-family:Consolas,Menlo,monospace;
+         margin:0; padding:24px; }
+  h1 { margin-top:0; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          padding:18px; }
+  .info { color:var(--muted); font-size:13px; line-height:1.6; }
+  label { display:block; margin-top:10px; font-size:13px; color:var(--muted); }
+  input, textarea, select, button {
+    background:#0d1117; color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px;
+    width:100%; box-sizing:border-box;
+  }
+  textarea { min-height: 70px; resize:vertical; }
+  button { background:var(--accent); color:#fff; cursor:pointer; border:none;
+           padding:10px; margin-top:12px; font-weight:600; }
+  button.secondary { background:#21262d; color:var(--text); }
+  button:hover { opacity:0.9; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
+  pre { background:#0d1117; border:1px solid var(--border); border-radius:6px;
+        padding:12px; overflow:auto; max-height: 360px; font-size: 12px; }
+  .verdict { font-size: 22px; font-weight:700; padding:8px 12px; border-radius:6px;
+             display:inline-block; margin-top:10px; }
+  .verdict.ATTACK { background: rgba(248,81,73,0.15); color: var(--bad);
+                    border:1px solid var(--bad); }
+  .verdict.NORMAL { background: rgba(63,185,80,0.15); color: var(--ok);
+                    border:1px solid var(--ok); }
+  .stat { display:inline-block; margin-right:14px; font-size:13px; }
+  .stat b { color:var(--accent); }
+  .pill { display:inline-block; background:#21262d; padding:2px 8px; border-radius:10px;
+          font-size:11px; color:var(--muted); margin-left:4px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:normal; }
+  tr.ATTACK td:first-child { color: var(--bad); }
+  tr.NORMAL td:first-child { color: var(--ok); }
+</style>
+</head>
+<body>
+<h1>WAF Model Test Server</h1>
+<p class="info">
+  Model: <b>{{ model_name }}</b> <span class="pill">{{ n_features }} features</span>
+  <span class="pill">threshold {{ threshold }}</span>
+  <span class="pill">{{ model_path }}</span>
+  &nbsp;|&nbsp; <b>{{ n_payloads }}</b> payload mẫu sẵn sàng
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h3>1. Test 1 request</h3>
+    <p class="info">Nhập request và xem model phán đoán + thời gian.</p>
+
+    <label>HTTP Method</label>
+    <select id="method">
+      <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>
+    </select>
+
+    <label>URL (kèm query string)</label>
+    <input id="url" value="/search?q=hello">
+
+    <label>Payload (body POST)</label>
+    <textarea id="payload" placeholder="vd: username=admin'--&password=x"></textarea>
+
+    <label>User-Agent</label>
+    <input id="ua" value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0">
+
+    <div class="row">
+      <button onclick="predict()">Predict</button>
+      <button class="secondary" onclick="loadSample()">Load payload mẫu →</button>
+    </div>
+
+    <select id="sample" onchange="useSample(this.value)" style="margin-top:8px;display:none">
+      <option value="">— chọn payload mẫu —</option>
+    </select>
+
+    <div id="verdict-box"></div>
+    <div id="timing-box" style="margin-top:8px"></div>
+    <pre id="result">{ chưa có kết quả }</pre>
+  </div>
+
+  <div class="card">
+    <h3>2. Benchmark toàn bộ payload mẫu</h3>
+    <p class="info">Chạy {{ n_payloads }} payload qua model nhiều lần, đo thống kê thời gian phản hồi.</p>
+
+    <label>Số lần lặp mỗi payload</label>
+    <input id="repeat" type="number" value="3" min="1" max="50">
+
+    <button onclick="benchmark()">Run benchmark</button>
+
+    <div id="bench-summary" style="margin-top:14px"></div>
+    <div id="bench-detail" style="margin-top:14px;max-height:380px;overflow:auto"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function predict() {
+  const entry = {
+    method:  $("method").value,
+    url:     $("url").value,
+    payload: $("payload").value,
+    headers: {
+      user_agent: $("ua").value,
+      referer: "-", cookie: "-", content_type: "-",
+      authorization: "-", x_forwarded_for: "-",
+      host: location.host, accept: "-",
+    },
+  };
+  const r = await fetch("/predict", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(entry),
+  });
+  const data = await r.json();
+  renderResult(data);
+}
+
+function renderResult(data) {
+  const v = data.verdict;
+  $("verdict-box").innerHTML =
+    `<span class="verdict ${v}">${v}</span>` +
+    `<span class="pill">p = ${data.attack_probability.toFixed(4)}</span>`;
+  const t = data.timing_ms;
+  $("timing-box").innerHTML =
+    `<span class="stat">extract: <b>${t.extract} ms</b></span>` +
+    `<span class="stat">predict: <b>${t.predict} ms</b></span>` +
+    `<span class="stat">total: <b>${t.total} ms</b></span>`;
+  $("result").textContent = JSON.stringify(data, null, 2);
+}
+
+async function loadSample() {
+  const r = await fetch("/payloads");
+  const list = await r.json();
+  const sel = $("sample");
+  sel.innerHTML = `<option value="">— chọn payload mẫu —</option>`;
+  list.forEach((p, i) => {
+    const tag = p.expected_label === 1 ? "[ATTACK]" : "[NORMAL]";
+    sel.innerHTML += `<option value="${i}">${tag} ${p.category} — ${p.name}</option>`;
+  });
+  sel.style.display = "block";
+  window.__samples = list;
+}
+
+function useSample(idx) {
+  if (!idx && idx !== 0) return;
+  const p = window.__samples[idx];
+  if (!p) return;
+  $("method").value  = p.entry.method || "GET";
+  $("url").value     = p.entry.url || "";
+  $("payload").value = p.entry.payload || "";
+  $("ua").value      = (p.entry.headers && p.entry.headers.user_agent) || $("ua").value;
+}
+
+async function benchmark() {
+  $("bench-summary").innerHTML = "<i>Đang chạy...</i>";
+  $("bench-detail").innerHTML = "";
+  const r = await fetch("/benchmark", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ repeat: parseInt($("repeat").value || "1") }),
+  });
+  const data = await r.json();
+  const s = data.summary;
+  let html = `<b>Tổng ${s.n_runs} lần predict</b> `
+           + `(${s.n_payloads} payload × ${s.repeat})<br><br>`;
+  for (const k of ["extract", "predict", "total"]) {
+    const t = s.timing_ms[k];
+    html += `<div class="stat">${k}: `
+          + `min <b>${t.min}</b> · median <b>${t.median}</b> · `
+          + `mean <b>${t.mean}</b> · p95 <b>${t.p95}</b> · max <b>${t.max}</b> ms</div><br>`;
+  }
+  if (s.accuracy != null) {
+    html += `<br><b>Accuracy:</b> ${(s.accuracy * 100).toFixed(2)}% &nbsp;`
+          + `<span class="pill">TP=${s.confusion.TP}</span>`
+          + `<span class="pill">TN=${s.confusion.TN}</span>`
+          + `<span class="pill">FP=${s.confusion.FP}</span>`
+          + `<span class="pill">FN=${s.confusion.FN}</span>`;
+  }
+  $("bench-summary").innerHTML = html;
+
+  let rows = `<table><tr><th>Verdict</th><th>Expected</th><th>Category</th>`
+           + `<th>Tên</th><th>p</th><th>ms</th></tr>`;
+  for (const d of data.detail) {
+    rows += `<tr class="${d.verdict}"><td>${d.verdict}</td>`
+          + `<td>${d.expected === 1 ? "ATTACK" : (d.expected === 0 ? "NORMAL" : "-")}</td>`
+          + `<td>${d.category || "-"}</td>`
+          + `<td>${d.name || "-"}</td>`
+          + `<td>${d.probability}</td>`
+          + `<td>${d.total_ms}</td></tr>`;
+  }
+  $("bench-detail").innerHTML = rows + "</table>";
+}
+</script>
+</body>
+</html>
