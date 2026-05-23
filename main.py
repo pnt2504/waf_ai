@@ -7,12 +7,12 @@ from features.extractor import FeatureExtractor
 from model.trainer import ModelTrainer
 
 # --- Cấu hình đường dẫn ---
-# DATA_PATH    = 'csic_training_data.json'
+DATA_PATH    = 'csic_training_data.json'
 # DATA_PATH    = 'csic_ecml_features.json'
 # DATA_PATH    = 'ecml_final.json'
 # DATA_PATH    = 'converted_httpparam_data.json'
 # DATA_PATH    = 'csic+ecml+httparam.json'
-DATA_PATH    = 'biblio_sample.json'
+# DATA_PATH    = 'biblio_sample.json'
 MISSED_PATH  = 'missed_attacks.json'
 FALSE_POS_PATH = 'false_positives.json'
 MODEL_PATH   = 'waf_model_final_v6.pkl'

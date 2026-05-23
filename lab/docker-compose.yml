@@ -32,7 +32,7 @@ services:
   waf:
     build:
       context: ..                          # project root — để COPY features/, config/, *.pkl
-      dockerfile: lab/waf_server/Dockerfile
+      dockerfile: waf_server/Dockerfile    # dùng Dockerfile gốc ở project root
     container_name: lab-waf
     ports:
       - "8000:8000"                        # expose để test trực tiếp không qua Nginx
@@ -42,12 +42,22 @@ services:
       #   waf_model_final_v5.pkl
       #   waf_model_final_v6.pkl  ← mặc định
       #   waf_model_xgboost_v2.pkl
-      WAF_MODEL_PATH: "/app/waf_model_final_v6.pkl"
-      WAF_THRESHOLD:  "0.50"
+      WAF_MODEL_PATH: "${WAF_MODEL_PATH:-/app/waf_model_baseline.pkl}"
+      WAF_THRESHOLD:  "${WAF_THRESHOLD:-0.50}"
       WAF_HOST:       "0.0.0.0"
       WAF_PORT:       "8000"
     volumes:
-      - ./waf_server/logs:/app/waf_server/logs
+      # Mount từng file .pkl — train xong chỉ cần restart waf, không rebuild
+      - ../waf_model_final_v6.pkl:/app/waf_model_final_v6.pkl
+      - ../waf_model_final_v5.pkl:/app/waf_model_final_v5.pkl
+      - ../waf_model_xgboost_v2.pkl:/app/waf_model_xgboost_v2.pkl
+      - ../waf_model_baseline.pkl:/app/waf_model_baseline.pkl
+      # MoE models — chỉ uncomment sau khi đã train xong (file phải tồn tại trước)
+      #- ../waf_model_moe_v2_best.pkl:/app/waf_model_moe_v2_best.pkl
+      #- ../waf_model_moe_v2_logistic.pkl:/app/waf_model_moe_v2_logistic.pkl
+      #- ../waf_model_moe_v2_mlp.pkl:/app/waf_model_moe_v2_mlp.pkl
+      #- ../waf_model_moe_v2_sparse.pkl:/app/waf_model_moe_v2_sparse.pkl
+      # KHÔNG mount ./waf_server/logs vì trên Windows Docker sẽ override cả /app/waf_server/
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

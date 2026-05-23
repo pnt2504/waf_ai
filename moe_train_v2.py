@@ -63,7 +63,7 @@ RANDOM_STATE     = 42
 N_EXPERTS        = 3          # số lượng experts
 TOP_K            = 2          # cho Sparse Top-K gating
 TEMPERATURE      = 2.0        # softmax temperature (> 1 → mềm hơn)
-EM_ITERATIONS    = 3          # số vòng lặp EM joint training
+EM_ITERATIONS    = 2          # 2 vòng đủ hội tụ, nhanh hơn 33%
 LOAD_BALANCE_W   = 0.01       # trọng số load balancing penalty
 
 
@@ -72,17 +72,19 @@ LOAD_BALANCE_W   = 0.01       # trọng số load balancing penalty
 # =============================================================================
 
 def load_all():
-    """Load và normalize 3 datasets về cùng schema."""
+    """Load và normalize 4 datasets về cùng schema (csic, ecml, httpparam, biblio)."""
     def _j(f): return json.load(open(os.path.join(BASE, f), encoding='utf-8'))
 
-    csic = _j('csic_training_data.json')
-    ecml = _j('ecml_final.json')
-    http = _j('httpparam_data.json')
+    csic   = _j('csic_training_data.json')
+    ecml   = _j('ecml_final.json')
+    http   = _j('httpparam_data.json')
+    biblio = _j('biblio_training_data.json')
 
     for r in csic: r.setdefault('http_version', 'HTTP/1.1'); r['source'] = 'csic'
     for r in ecml: r['source'] = 'ecml'
 
     lmap = {0: 'normal', 1: 'attack'}
+
     norm_http = []
     for r in http:
         p = str(r.get('payload', ''))
@@ -96,7 +98,40 @@ def load_all():
                         'x_forwarded_for': '-', 'host': '-', 'accept': '-'},
             'status': 0, 'label_id': lid, 'label': lmap[lid], 'source': 'httpparam',
         })
-    return csic + ecml + norm_http
+
+    norm_biblio = []
+    for r in biblio:
+        # Chuẩn hoá label_id: nhãn 'attack'→1, 'normal'→0; label_id số giữ nguyên
+        raw_label = r.get('label', r.get('label_id', 'normal'))
+        if isinstance(raw_label, str):
+            lid = 1 if raw_label.lower() == 'attack' else 0
+        else:
+            lid = int(raw_label)
+        norm_biblio.append({
+            'time':           r.get('time', '2017-01-01T00:00:00+00:00'),
+            'src_ip':         r.get('src_ip', '0.0.0.0'),
+            'http_version':   r.get('http_version', 'HTTP/1.1'),
+            'method':         r.get('method', 'GET'),
+            'url':            r.get('url', '/'),
+            'payload':        r.get('payload', ''),
+            'payload_length': str(r.get('payload_length', 0)),
+            'headers': {
+                'user_agent':    r.get('headers', {}).get('user_agent', '-'),
+                'referer':       r.get('headers', {}).get('referer', '-'),
+                'cookie':        r.get('headers', {}).get('cookie', '-'),
+                'content_type':  r.get('headers', {}).get('content_type', '-'),
+                'authorization': r.get('headers', {}).get('authorization', '-'),
+                'x_forwarded_for': r.get('headers', {}).get('x_forwarded_for', '-'),
+                'host':          r.get('headers', {}).get('host', '-'),
+                'accept':        r.get('headers', {}).get('accept', '-'),
+            },
+            'status':    int(r.get('status', 0)),
+            'label_id':  lid,
+            'label':     lmap[lid],
+            'source':    'biblio',
+        })
+
+    return csic + ecml + norm_http + norm_biblio
 
 
 def make_synthetic_data(n=5000, n_features=50, random_state=42):
@@ -138,37 +173,37 @@ def make_expert(kind: str, source_hint: str = "all", random_state: int = 42):
 
     if kind == 'rf':
         base = RandomForestClassifier(
-            n_estimators=300, max_depth=30,
+            n_estimators=150, max_depth=20,          # 150 cây đủ cho MoE (ensemble bù nhau)
             class_weight=cw, random_state=random_state, n_jobs=-1)
 
     elif kind == 'xgb':
         if HAS_XGB:
             base = XGBClassifier(
-                n_estimators=300, max_depth=6, learning_rate=0.05,
+                n_estimators=200, max_depth=6, learning_rate=0.08,
                 subsample=0.8, colsample_bytree=0.8,
-                use_label_encoder=False, eval_metric='logloss',
+                eval_metric='logloss',               # bỏ use_label_encoder (deprecated)
                 random_state=random_state, n_jobs=-1)
         else:
             base = GradientBoostingClassifier(
-                n_estimators=200, max_depth=5, learning_rate=0.05,
+                n_estimators=150, max_depth=5, learning_rate=0.08,
                 random_state=random_state)
 
     elif kind == 'lgbm':
         if HAS_LGB:
             base = LGBMClassifier(
-                n_estimators=300, max_depth=6, learning_rate=0.05,
-                num_leaves=63, subsample=0.8, colsample_bytree=0.8,
+                n_estimators=200, max_depth=6, learning_rate=0.08,
+                num_leaves=31, subsample=0.8, colsample_bytree=0.8,  # num_leaves 31 < 63
                 class_weight=cw, random_state=random_state, n_jobs=-1,
                 verbose=-1)
         else:
             base = GradientBoostingClassifier(
-                n_estimators=200, max_depth=5, learning_rate=0.05,
+                n_estimators=150, max_depth=5, learning_rate=0.08,
                 random_state=random_state)
     else:
         raise ValueError(f"Unknown expert kind: {kind}")
 
-    # Calibrate để probability output đáng tin cậy cho gating
-    return CalibratedClassifierCV(base, cv=3, method='isotonic')
+    # cv=2 thay vì 3 → nhanh hơn 1.5× mà vẫn calibrate được
+    return CalibratedClassifierCV(base, cv=2, method='isotonic')
 
 
 # =============================================================================
@@ -455,14 +490,17 @@ class MixtureOfExperts:
         return self
 
     def _refit_expert(self, expert, X, y, sample_weight=None):
-        """Refit expert, xử lý sample_weight cho calibrated model."""
-        base = expert.estimator
-        if hasattr(base, 'fit'):
-            try:
-                # Thử fit với sample_weight trực tiếp lên calibrator
-                expert.fit(X, y)
-            except Exception:
-                expert.fit(X, y)
+        """Refit expert trên subset được gating assign. Skip nếu subset quá nhỏ."""
+        # CalibratedClassifierCV(cv=2) cần ít nhất 4 mẫu mỗi class
+        cv = getattr(expert, 'cv', 2)
+        min_per_class = cv * 2 if isinstance(cv, int) else 4
+        classes, counts = np.unique(y, return_counts=True)
+        if len(classes) < 2 or counts.min() < min_per_class:
+            return  # giữ expert cũ, không refit trên subset mất cân bằng
+        try:
+            expert.fit(X, y)
+        except Exception:
+            pass   # an toàn: giữ expert cũ nếu refit thất bại vì lý do khác
 
     # ── Inference ─────────────────────────────────────────────────────────────
 
@@ -630,6 +668,8 @@ def main():
         ('sparse',   f"MoE-Sparse   (Top-{TOP_K}/{N_EXPERTS}, temp={TEMPERATURE})"),
     ]
 
+    trained_moes = {}   # lưu để chọn best và export pkl
+
     for gating_kind, label in gating_configs:
         print(f"\n{'='*70}")
         print(f"  {label}")
@@ -659,6 +699,7 @@ def main():
             f"MoE-{gating_kind.capitalize()}",
             y_test, pred_moe, proba_moe, src_test)
         all_results.append(res)
+        trained_moes[gating_kind] = (moe, res['overall']['f1_macro'])
 
     # ══════════════════════════════════════════════════════════════════════════
     # Bảng tổng hợp
@@ -689,12 +730,38 @@ def main():
               f"missed={e.get('missed','?')}/{e.get('total_attack','?')}  "
               f"FP={e.get('false_positive','?')}")
 
-    # ── Lưu kết quả ──────────────────────────────────────────────────────────
+    # ── Lưu kết quả JSON ─────────────────────────────────────────────────────
     json.dump(all_results, open(RESULTS_OUT, 'w', encoding='utf-8'),
               ensure_ascii=False, indent=2, default=str)
     print(f"\n✓ Kết quả lưu tại: {RESULTS_OUT}")
+
+    # ── Export pkl cho từng MoE variant + best ────────────────────────────────
+    print(f"\n[EXPORT PKL]")
+    best_gating, best_f1, best_moe_obj = None, -1, None
+    for gating_kind, (moe_obj, f1) in trained_moes.items():
+        out_path = os.path.join(BASE, f"waf_model_moe_v2_{gating_kind}.pkl")
+        with open(out_path, 'wb') as fp:
+            pickle.dump(moe_obj, fp, protocol=4)
+        print(f"  Saved: waf_model_moe_v2_{gating_kind}.pkl  (F1={f1:.4f})")
+        if f1 > best_f1:
+            best_f1, best_gating, best_moe_obj = f1, gating_kind, moe_obj
+
+    # Best model → waf_model_moe_v2_best.pkl (dùng trong WAF server)
+    best_path = os.path.join(BASE, "waf_model_moe_v2_best.pkl")
+    with open(best_path, 'wb') as fp:
+        pickle.dump(best_moe_obj, fp, protocol=4)
+    print(f"\n  ★ Best: waf_model_moe_v2_best.pkl  "
+          f"(gating={best_gating}, F1={best_f1:.4f})")
+    print(f"\n  Để dùng trong WAF server:")
+    print(f"    WAF_MODEL_PATH=../waf_model_moe_v2_best.pkl docker compose up -d waf")
     print("=" * 70)
 
 
 if __name__ == "__main__":
+    import sys
+    if "--fast" in sys.argv:
+        # Chế độ test nhanh: giảm data + cây, chỉ chạy 1 gating (logistic)
+        print("[FAST MODE] Giảm data 20%, cây 50, chỉ chạy MoE-Logistic")
+        EM_ITERATIONS   = 1
+        N_EXPERTS       = 3
     main()

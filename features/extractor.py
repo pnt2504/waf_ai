@@ -24,6 +24,9 @@ from features.helpers import (
     header_anomaly_score,
 )
 
+# Số tầng decode tối đa (ngăn vòng lặp vô hạn với chuỗi độc)
+_MAX_DECODE_DEPTH = 15
+
 
 class FeatureExtractor:
     """
@@ -39,6 +42,7 @@ class FeatureExtractor:
     def feature_names(self) -> list[str]:
         """Tên các feature theo đúng thứ tự trong vector trả về."""
         return [
+            # ── 27 features gốc (giữ nguyên thứ tự) ──────────────────────
             "input_len",
             "alpha_ratio",
             "special_ratio",
@@ -62,10 +66,16 @@ class FeatureExtractor:
             "manipulate_weight",
             "header_anomaly",
             "uncommon_method",
-            "is_empty_probe",    # GET không payload + header scanner (bắt Konqueror GET /)
-            "extra_header_risk", # header_anomaly vượt ngưỡng 3 (bắt scanner rõ ràng hơn)
-            "is_scanner_ua",     # UA khớp đúng tên scanner (Konqueror, nikto, sqlmap...)
-            "param_name_entropy",# Shannon entropy của tên tham số — attack có entropy cao hơn
+            "is_empty_probe",
+            "extra_header_risk",
+            "is_scanner_ua",
+            "param_name_entropy",
+            # ── 5 features URL-based mới (Biblio-US17) ────────────────────
+            "url_encoding_depth",      # Số tầng URL decode cần thiết (0=normal, ≥2=suspicious)
+            "has_double_encoding",     # Binary: URL chứa %25 lồng nhau (%2525...)
+            "url_sqli_decoded",        # SQLi count trên URL đã decode đủ tầng
+            "url_xss_decoded",         # XSS / javascript: count trên URL đã decode đủ tầng
+            "url_path_traversal_decoded",  # Path traversal count trên URL đã decode đủ tầng
         ]
 
     # ------------------------------------------------------------------
@@ -82,8 +92,16 @@ class FeatureExtractor:
         body    = str(entry.get('payload', ''))
         headers = entry.get('headers', {})
 
+        # Decode URL đủ tầng (quan trọng với Biblio multi-layer encoding)
+        url_decoded, url_enc_depth = self._full_decode(url)
+
         effective_payload = self._get_effective_payload(method, url, body)
-        injection_text    = f"{url} {effective_payload}"
+
+        # injection_text dùng url_decoded thay vì url gốc:
+        # - CSIC/ECML: single-encoding → url_decoded ≈ url, không đổi keyword counts
+        # - Biblio:    multi-encoding  → url_decoded reveal attack pattern thực sự
+        # Không gộp cả hai (url + url_decoded) để tránh double-counting làm lệch features
+        injection_text = f"{url_decoded} {effective_payload}"
 
         # --- Thống kê ký tự ---
         char_stats        = self._char_stats(effective_payload)
@@ -136,12 +154,23 @@ class FeatureExtractor:
         )
 
         # --- Feature mới 2: extra_header_risk ---
-        # Mỗi bậc header_anomaly vượt qua ngưỡng 3 đều đáng ngờ hơn tuyến tính.
-        # h=3 → extra=0, h=4 → extra=1, h=5 → extra=2, ...
-        # Giúp model phân biệt scanner "rõ ràng" (h=5-7) với scanner "nhẹ" (h=3).
         extra_header_risk = max(0, int(header_anomaly) - 3)
 
-        # --- Tổng điểm Z ---
+        # --- 5 Features URL-based mới (Biblio-US17) ---
+        # url_encoding_depth: số tầng decode, capped tại 10 để tránh outlier
+        url_encoding_depth = min(url_enc_depth, 10)
+
+        # has_double_encoding: %25 trong URL gốc = dấu hiệu encode lồng nhau
+        # %25 là encode của '%', nếu có trong URL nghĩa là URL đã bị encode ≥2 lần
+        has_double_encoding = int('%25' in url.lower())
+
+        # Phân tích URL đã decode đủ tầng (riêng phần path, không tính effective_payload)
+        url_decoded_lower = url_decoded.lower()
+        url_sqli_decoded          = count_sqli_keywords(url_decoded_lower)
+        url_xss_decoded           = count_keywords(url_decoded_lower, ATTACK_KEYWORDS['xss'])
+        url_path_traversal_decoded = count_keywords(url_decoded_lower, ATTACK_KEYWORDS['path_traversal'])
+
+        # Cập nhật z_score bao gồm tín hiệu URL mới
         z = (
             sqli_count        * WEIGHTS['sqli']          +
             xss_count         * WEIGHTS['xss']           +
@@ -154,10 +183,17 @@ class FeatureExtractor:
             header_anomaly    * 220                      +
             uncommon_method   * 180                      +
             is_empty_probe    * WEIGHTS['empty_probe']   +
-            extra_header_risk * WEIGHTS['extra_header']
+            extra_header_risk * WEIGHTS['extra_header']  +
+            # Tín hiệu URL-based (đóng góp vào z_score để cải thiện rule-based detection)
+            url_encoding_depth        * 80               +
+            has_double_encoding       * 200              +
+            url_sqli_decoded          * WEIGHTS['sqli']  +
+            url_xss_decoded           * WEIGHTS['xss']   +
+            url_path_traversal_decoded * WEIGHTS['path']
         )
 
         return [
+            # 27 features gốc
             input_len, alpha_ratio, special_ratio, raw_ratio, z,
             sqli_count, xss_count, path_count, cmd_count, php_count, probing_kw_count,
             param_count, max_param_len,
@@ -166,11 +202,41 @@ class FeatureExtractor:
             header_anomaly, uncommon_method,
             is_empty_probe, extra_header_risk, is_scanner_ua,
             param_name_entropy,
+            # 5 features URL-based mới
+            url_encoding_depth, has_double_encoding,
+            url_sqli_decoded, url_xss_decoded, url_path_traversal_decoded,
         ]
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _full_decode(self, text: str) -> tuple:
+        """
+        Decode URL encoding lặp lại cho đến khi chuỗi không thay đổi nữa.
+        Xử lý multi-layer encoding (kỹ thuật WAF bypass phổ biến trong Biblio-US17).
+
+        Ví dụ: /%252525c3ndice
+          → /%2525c3ndice  (depth 1)
+          → /%25c3ndice    (depth 2)
+          → /%c3ndice      (depth 3)
+          → ... (tiếp tục đến khi ổn định)
+
+        Returns:
+            (decoded_text, depth) — depth = số tầng thực sự cần decode
+        """
+        decoded = text
+        depth   = 0
+        prev    = None
+        while prev != decoded and depth < _MAX_DECODE_DEPTH:
+            prev = decoded
+            try:
+                decoded = urllib.parse.unquote(decoded)
+            except Exception:
+                break
+            depth += 1
+        # depth - 1 vì vòng lặp cuối không thay đổi gì
+        return decoded, max(0, depth - 1)
 
     def _get_effective_payload(self, method: str, url: str, body: str) -> str:
         """

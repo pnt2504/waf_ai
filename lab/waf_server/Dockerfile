@@ -17,12 +17,15 @@ RUN pip install --no-cache-dir \
     numpy>=1.26 \
     scikit-learn>=1.3
 
-# Copy toàn bộ project (cần features/, config/, model/, waf_server/)
+# Copy toàn bộ project root vào /app (features/, config/, *.pkl, waf_server/)
 COPY . .
+
+# Chạy từ trong waf_server/ — app.py tự thêm /app vào sys.path
+# nên features/, config/ vẫn import được bình thường
+WORKDIR /app/waf_server
 
 EXPOSE 8000
 
-# Chạy từ project root để import được features/, config/, model/
-CMD ["python", "-m", "uvicorn", "waf_server.app:app", \
+CMD ["python", "-m", "uvicorn", "app:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--log-level", "info"]

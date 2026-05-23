@@ -63,7 +63,7 @@ ATTACK_KEYWORDS = {
 
     # Không dùng ';', '|', '&' đơn lẻ: mọi query có & nối tham số sẽ bị tính nhầm
     'cmd_injection': [
-        '&&', '||', '`', '$()', '/bin/sh', 'cmd.exe', 'powershell',
+        '&&', '||', '`', '$()', '$(', '/bin/sh', 'cmd.exe', 'powershell',
         'curl', 'ping', 'whoami', 'cat ', 'grep', 'rm -rf',
         'chmod', 'chown', 'nc -', 'nc -e', 'base64',
         ';ls', '; ls', '/dev/null',

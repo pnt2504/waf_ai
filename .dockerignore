@@ -1,0 +1,31 @@
+# Loại file lớn không cần thiết để build image
+__pycache__/
+*.pyc
+*.pyo
+*.docx
+*.pptx
+*.xlsx
+*.log
+*.jsonl
+
+# Loại data/model files lớn (mount qua volume khi chạy)
+*.pkl
+csic_*.json
+ecml_*.json
+httpparam_*.json
+merged_*.json
+merged_*.jsonl
+biblio_sample.json
+csic+ecml+httparam.json
+
+# Loại thư mục không cần cho runtime
+lab/
+.git/
+
+# GIỮ LẠI các file cần thiết:
+# waf_server/   → app.py, templates/, requirements.txt
+# features/     → extractor.py, helpers.py
+# config/       → keywords.py
+# model/        → trainer.py
+# waf_server/sample_payloads.json  ← cần cho /benchmark endpoint
+!waf_server/sample_payloads.json

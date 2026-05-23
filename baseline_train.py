@@ -71,6 +71,35 @@ def load_httpparam(path):
     return out
 
 
+def load_biblio(path):
+    raw  = json.load(open(path, encoding='utf-8'))
+    lmap = {0: 'normal', 1: 'attack'}
+    out  = []
+    for r in raw:
+        raw_label = r.get('label', r.get('label_id', 'normal'))
+        lid = 1 if (isinstance(raw_label, str) and raw_label.lower() == 'attack') \
+              else (int(raw_label) if not isinstance(raw_label, str) else 0)
+        out.append({
+            'time':           r.get('time', '2017-01-01T00:00:00+00:00'),
+            'src_ip':         r.get('src_ip', '0.0.0.0'),
+            'http_version':   r.get('http_version', 'HTTP/1.1'),
+            'method':         r.get('method', 'GET'),
+            'url':            r.get('url', '/'),
+            'payload':        r.get('payload', ''),
+            'payload_length': str(r.get('payload_length', 0)),
+            'headers': {
+                'user_agent': '-', 'referer': '-', 'cookie': '-',
+                'content_type': '-', 'authorization': '-',
+                'x_forwarded_for': '-', 'host': '-', 'accept': '-',
+            },
+            'status':   int(r.get('status', 0)),
+            'label_id': lid,
+            'label':    lmap[lid],
+            'source':   'biblio',
+        })
+    return out
+
+
 # ─────────────────────────────────────────────
 # Evaluate helper
 # ─────────────────────────────────────────────
@@ -100,7 +129,7 @@ def evaluate_subset(name, y_true, y_pred, y_proba):
 
 def main():
     print("=" * 65)
-    print("BƯỚC 1 — BASELINE (Direct Concat, 3 datasets, no imputation)")
+    print("BƯỚC 1 — BASELINE (Direct Concat, 4 datasets, no imputation)")
     print("=" * 65)
 
     # 1. Load
@@ -108,10 +137,11 @@ def main():
     csic      = load_csic     (os.path.join(BASE, 'csic_training_data.json'))
     ecml      = load_ecml     (os.path.join(BASE, 'ecml_final.json'))
     httpparam = load_httpparam(os.path.join(BASE, 'httpparam_data.json'))
-    merged    = csic + ecml + httpparam
+    biblio    = load_biblio   (os.path.join(BASE, 'biblio_training_data.json'))
+    merged    = csic + ecml + httpparam + biblio
 
     lc = Counter(r['label'] for r in merged)
-    print(f"  CSIC={len(csic):,}  ECML={len(ecml):,}  HTTPParam={len(httpparam):,}")
+    print(f"  CSIC={len(csic):,}  ECML={len(ecml):,}  HTTPParam={len(httpparam):,}  Biblio={len(biblio):,}")
     print(f"  TOTAL={len(merged):,} | normal={lc['normal']:,} attack={lc['attack']:,}")
 
     # 2. Extract features
@@ -156,7 +186,7 @@ def main():
     print("KẾT QUẢ — THEO TỪNG DATASET")
     print("=" * 65)
     per_source = {}
-    for src in ['csic', 'ecml', 'httpparam']:
+    for src in ['csic', 'ecml', 'httpparam', 'biblio']:
         mask = src_test == src
         per_source[src] = evaluate_subset(
             src.upper(), y_test[mask], y_pred[mask], proba[mask])
@@ -176,7 +206,7 @@ def main():
     # 8. Save
     results = {
         'strategy': 'baseline_direct_concat',
-        'datasets': ['csic', 'ecml', 'httpparam'],
+        'datasets': ['csic', 'ecml', 'httpparam', 'biblio'],
         'n_train': int(len(X_train)), 'n_test': int(len(X_test)),
         'threshold': ATTACK_THRESHOLD,
         'overall': overall,
@@ -191,12 +221,12 @@ def main():
     print("\n" + "=" * 65)
     print("TÓM TẮT — dán vào bảng luận văn")
     print("=" * 65)
-    print(f"  Strategy   : Baseline — Direct Concat (không xử lý)")
+    print(f"  Strategy   : Baseline — Direct Concat (4 datasets)")
     print(f"  Samples    : {len(merged):,}  (train {len(X_train):,} / test {len(X_test):,})")
     print(f"  F1-macro   : {overall.get('f1_macro',0):.4f}")
     print(f"  AUC-ROC    : {overall.get('auc_roc',0):.4f}")
     print(f"  Accuracy   : {overall.get('accuracy',0)*100:.2f}%")
-    for src in ['csic','ecml','httpparam']:
+    for src in ['csic', 'ecml', 'httpparam', 'biblio']:
         ps = per_source.get(src, {})
         print(f"  F1 [{src:10s}]: {ps.get('f1_macro', float('nan')):.4f}")
     print("=" * 65)
