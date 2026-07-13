@@ -1,0 +1,150 @@
+============================================================
+DANH SÁCH REQUEST DEMO ML WAF TRÊN TRÌNH DUYỆT
+============================================================
+
+Mỗi lần copy một URL bên dưới và dán vào thanh địa chỉ trình duyệt.
+
+
+1. KIỂM TRA TRẠNG THÁI WAF VÀ MODEL ĐANG DÙNG
+------------------------------------------------------------
+http://localhost:8000/health
+
+Kỳ vọng:
+- WAF đang hoạt động.
+- Model: waf_model_baseline.pkl
+- Threshold: 0.5
+
+
+2. REQUEST BÌNH THƯỜNG — WAF CHO PHÉP
+------------------------------------------------------------
+
+2.1. File CSS:
+http://localhost:8080/assets/style.css
+
+Kỳ vọng: HTTP 200, verdict NORMAL.
+
+2.2. File ảnh:
+http://localhost:8080/images/logo.png
+
+Kỳ vọng: HTTP 200, verdict NORMAL.
+
+2.3. File JavaScript:
+http://localhost:8080/assets/app.js
+
+Kỳ vọng: HTTP 200, verdict NORMAL.
+
+
+3. SQL INJECTION — WAF CHẶN
+------------------------------------------------------------
+http://localhost:8080/login?id=%27%20OR%20%271%27%3D%271
+
+Payload sau khi giải mã:
+' OR '1'='1
+
+Kỳ vọng:
+- HTTP 403
+- verdict ATTACK
+- Xác suất tấn công khoảng 0.9967
+
+
+4. CROSS-SITE SCRIPTING (XSS) — WAF CHẶN
+------------------------------------------------------------
+http://localhost:8080/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E
+
+Payload sau khi giải mã:
+<script>alert(1)</script>
+
+Kỳ vọng:
+- HTTP 403
+- verdict ATTACK
+- Xác suất tấn công khoảng 0.9967
+
+
+5. PATH TRAVERSAL / LFI — WAF CHẶN
+------------------------------------------------------------
+http://localhost:8080/file?name=..%2F..%2F..%2Fetc%2Fpasswd
+
+Payload sau khi giải mã:
+../../../etc/passwd
+
+Kỳ vọng:
+- HTTP 403
+- verdict ATTACK
+- Xác suất tấn công khoảng 0.9967
+
+
+6. COMMAND INJECTION — WAF CHẶN
+------------------------------------------------------------
+http://localhost:8080/ping?host=127.0.0.1%3Bwhoami
+
+Payload sau khi giải mã:
+127.0.0.1;whoami
+
+Kỳ vọng:
+- HTTP 403
+- verdict ATTACK
+- Xác suất tấn công khoảng 0.96
+
+
+7. DÒ TÌM FILE CẤU HÌNH — WAF CHẶN
+------------------------------------------------------------
+http://localhost:8080/.env
+
+Kỳ vọng: HTTP 403, verdict ATTACK.
+
+Lưu ý: Khi dán URL vào trình duyệt, request sử dụng User-Agent của trình
+duyệt nên xác suất có thể khác khi gửi bằng sqlmap hoặc curl.
+
+
+8. DEMO SO SÁNH QUA WAF VÀ BYPASS WAF
+------------------------------------------------------------
+
+8.1. SQL Injection đi qua Nginx và WAF:
+http://localhost:8080/login?id=%27%20OR%20%271%27%3D%271
+
+Kỳ vọng: HTTP 403 — WAF phát hiện và chặn request.
+
+8.2. Cùng request nhưng gửi thẳng đến backend:
+http://localhost:5001/login?id=%27%20OR%20%271%27%3D%271
+
+Kỳ vọng: HTTP 200 — backend vẫn tiếp nhận request vì đã bypass WAF.
+
+Giải thích khi demo:
+"Cùng một request SQL Injection, khi đi qua cổng 8080 thì Nginx gửi
+request sang mô hình WAF để kiểm tra và trả về HTTP 403. Khi gửi trực
+tiếp tới backend ở cổng 5001, request trả về HTTP 200. Điều này chứng
+minh WAF là lớp thực hiện phát hiện và ngăn chặn request độc hại."
+
+
+============================================================
+THỨ TỰ DEMO NGẮN GỌN ĐỀ XUẤT
+============================================================
+
+Bước 1 — Kiểm tra WAF và model:
+http://localhost:8000/health
+
+Bước 2 — Request bình thường, được cho qua:
+http://localhost:8080/assets/style.css
+
+Bước 3 — SQL Injection, bị chặn:
+http://localhost:8080/login?id=%27%20OR%20%271%27%3D%271
+
+Bước 4 — XSS, bị chặn:
+http://localhost:8080/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E
+
+Bước 5 — Path Traversal, bị chặn:
+http://localhost:8080/file?name=..%2F..%2F..%2Fetc%2Fpasswd
+
+Bước 6 — Command Injection, bị chặn:
+http://localhost:8080/ping?host=127.0.0.1%3Bwhoami
+
+Bước 7 — So sánh cùng SQL Injection khi bypass WAF:
+http://localhost:5001/login?id=%27%20OR%20%271%27%3D%271
+
+
+LƯU Ý:
+- Nên dùng /assets/style.css làm request NORMAL trong buổi demo.
+- Không nên dùng /search?q=python+tips làm request NORMAL vì model
+  baseline hiện phân loại nhầm request đó là ATTACK với xác suất 0.5104.
+- Các kết quả xác suất nêu trên đã được kiểm tra với hệ thống đang chạy,
+  nhưng request_id và xác suất có thể thay đổi nhẹ giữa các lần chạy.

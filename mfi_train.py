@@ -4,15 +4,14 @@
 #   - MFI-Mean            : thay thế feature thiếu = mean toàn bộ CSIC+ECML
 #   - MFI-Class-Conditional: thay thế = mean theo class (normal/attack) CSIC+ECML
 #
-# Features bị thiếu trong HTTPParam (url="" và headers={}):
-#   16  critical_score     (từ URL)
-#   17  is_critical_ext    (từ URL)
-#   19  url_penalty        (từ URL)
-#   21  header_anomaly     (từ Headers)
-#   23  is_empty_probe     (từ Headers)
-#   24  extra_header_risk  (từ Headers)
-#   25  is_scanner_ua      (từ Headers)
+# Features có thể bị thiếu, theo từng nguồn:
+#   HTTPParam (url="" và headers rỗng) → thiếu CẢ 7:
+#     16 critical_score, 17 is_critical_ext, 19 url_penalty   (từ URL)
+#     21 header_anomaly, 23 is_empty_probe, 24 extra_header_risk, 25 is_scanner_ua (từ Headers)
+#   Biblio (có URL thật nhưng headers rỗng) → chỉ thiếu 4 feature Header:
+#     21 header_anomaly, 23 is_empty_probe, 24 extra_header_risk, 25 is_scanner_ua
 #
+# Reference để tính mean impute: CSIC+ECML (hai nguồn duy nhất đủ cả 7 feature).
 # So sánh: Baseline (zeros) vs MFI-Mean vs MFI-Class-Conditional
 # =============================================================================
 
@@ -33,12 +32,20 @@ MAX_DEPTH        = 30
 TEST_SIZE        = 0.2
 RANDOM_STATE     = 42
 
-# Indices của features bị thiếu trong HTTPParam
-MISSING_IDX = [16, 17, 19, 21, 23, 24, 25]
-MISSING_NAMES = [
+# Tập tất cả feature có thể bị thiếu (union), dùng làm thứ tự chuẩn cho mean
+ALL_MISSING_IDX = [16, 17, 19, 21, 23, 24, 25]
+ALL_MISSING_NAMES = [
     "critical_score", "is_critical_ext", "url_penalty",
     "header_anomaly", "is_empty_probe", "extra_header_risk", "is_scanner_ua",
 ]
+
+# Feature bị thiếu theo từng nguồn (chỉ những index này mới được impute)
+#   httpparam: thiếu cả URL (16,17,19) + Header (21,23,24,25)
+#   biblio   : chỉ thiếu Header (21,23,24,25); 3 feature URL có sẵn
+MISSING_BY_SOURCE = {
+    'httpparam': [16, 17, 19, 21, 23, 24, 25],
+    'biblio':    [21, 23, 24, 25],
+}
 
 
 # ─────────────────────────────────────────────
@@ -48,9 +55,10 @@ MISSING_NAMES = [
 def load_all():
     def _load(p): return json.load(open(p, encoding='utf-8'))
 
-    csic = _load(os.path.join(BASE, 'csic_training_data.json'))
-    ecml = _load(os.path.join(BASE, 'ecml_final.json'))
-    http = _load(os.path.join(BASE, 'httpparam_data.json'))
+    csic   = _load(os.path.join(BASE, 'csic_training_data.json'))
+    ecml   = _load(os.path.join(BASE, 'ecml_final.json'))
+    http   = _load(os.path.join(BASE, 'httpparam_data.json'))
+    biblio = _load(os.path.join(BASE, 'biblio_training_data.json'))
 
     for r in csic: r.setdefault('http_version', 'HTTP/1.1'); r['source'] = 'csic'
     for r in ecml: r['source'] = 'ecml'
@@ -69,7 +77,39 @@ def load_all():
                         'x_forwarded_for':'-','host':'-','accept':'-'},
             'status': 0, 'label_id': lid, 'label': lmap[lid], 'source': 'httpparam',
         })
-    return csic + ecml + norm_http
+
+    norm_biblio = []
+    for r in biblio:
+        raw_label = r.get('label', r.get('label_id', 'normal'))
+        if isinstance(raw_label, str):
+            lid = 1 if raw_label.lower() == 'attack' else 0
+        else:
+            lid = int(raw_label)
+        norm_biblio.append({
+            'time':           r.get('time', '2017-01-01T00:00:00+00:00'),
+            'src_ip':         r.get('src_ip', '0.0.0.0'),
+            'http_version':   r.get('http_version', 'HTTP/1.1'),
+            'method':         r.get('method', 'GET'),
+            'url':            r.get('url', '/'),
+            'payload':        r.get('payload', ''),
+            'payload_length': str(r.get('payload_length', 0)),
+            'headers': {
+                'user_agent':    r.get('headers', {}).get('user_agent', '-'),
+                'referer':       r.get('headers', {}).get('referer', '-'),
+                'cookie':        r.get('headers', {}).get('cookie', '-'),
+                'content_type':  r.get('headers', {}).get('content_type', '-'),
+                'authorization': r.get('headers', {}).get('authorization', '-'),
+                'x_forwarded_for': r.get('headers', {}).get('x_forwarded_for', '-'),
+                'host':          r.get('headers', {}).get('host', '-'),
+                'accept':        r.get('headers', {}).get('accept', '-'),
+            },
+            'status':    int(r.get('status', 0)),
+            'label_id':  lid,
+            'label':     lmap[lid],
+            'source':    'biblio',
+        })
+
+    return csic + ecml + norm_http + norm_biblio
 
 
 # ─────────────────────────────────────────────
@@ -78,53 +118,56 @@ def load_all():
 
 def compute_imputation_stats(X_train, y_train, src_train):
     """
-    Tính mean của MISSING_IDX từ CSIC+ECML trong tập train.
-    Trả về: mean_global, mean_class0, mean_class1 (mỗi cái là array độ dài 7)
+    Tính mean của ALL_MISSING_IDX từ CSIC+ECML trong tập train.
+    Trả về 3 dict {feature_index: mean_value}: global, class0 (normal), class1 (attack).
+    Dùng dict để mỗi nguồn lấy đúng tập index bị thiếu của riêng nó.
     """
     mask_ref = (src_train == 'csic') | (src_train == 'ecml')
     X_ref    = X_train[mask_ref]
     y_ref    = y_train[mask_ref]
 
-    feats = X_ref[:, MISSING_IDX]  # shape: (n_ref, 7)
+    feats = X_ref[:, ALL_MISSING_IDX]  # shape: (n_ref, len(ALL_MISSING_IDX))
 
-    mean_global = feats.mean(axis=0)
-    mean_class0 = feats[y_ref == 0].mean(axis=0)
-    mean_class1 = feats[y_ref == 1].mean(axis=0)
+    g  = feats.mean(axis=0)
+    c0 = feats[y_ref == 0].mean(axis=0)
+    c1 = feats[y_ref == 1].mean(axis=0)
+
+    mean_global = dict(zip(ALL_MISSING_IDX, g))
+    mean_class0 = dict(zip(ALL_MISSING_IDX, c0))
+    mean_class1 = dict(zip(ALL_MISSING_IDX, c1))
 
     print(f"\n  Imputation stats (from CSIC+ECML train, n={mask_ref.sum():,}):")
-    for i, name in enumerate(MISSING_NAMES):
-        print(f"    {name:<22s}  global={mean_global[i]:.4f}  "
+    for i, name in zip(ALL_MISSING_IDX, ALL_MISSING_NAMES):
+        print(f"    [{i:>2d}] {name:<18s}  global={mean_global[i]:.4f}  "
               f"normal={mean_class0[i]:.4f}  attack={mean_class1[i]:.4f}")
 
     return mean_global, mean_class0, mean_class1
 
 
 def apply_mfi_mean(X, src, mean_global):
-    """Thay thế feature thiếu của HTTPParam bằng mean global."""
+    """Impute feature thiếu bằng mean global, riêng cho từng nguồn (httpparam, biblio)."""
     X_new = X.copy()
-    mask  = src == 'httpparam'
-    X_new[mask][:, MISSING_IDX] = mean_global
-    # Cập nhật inplace đúng cách
-    httpparam_rows = np.where(mask)[0]
-    for row in httpparam_rows:
-        X_new[row, MISSING_IDX] = mean_global
+    for source, idxs in MISSING_BY_SOURCE.items():
+        vals = np.array([mean_global[i] for i in idxs], dtype=X_new.dtype)
+        for row in np.where(src == source)[0]:
+            X_new[row, idxs] = vals
     return X_new
 
 
 def apply_mfi_class_conditional(X, y, src, mean_class0, mean_class1):
     """
-    Thay thế feature thiếu của HTTPParam bằng mean theo class.
-    Dùng được ở train (y có sẵn) và test (y có sẵn khi eval).
+    Impute feature thiếu bằng mean theo class, riêng cho từng nguồn.
+    Mỗi nguồn chỉ impute đúng tập index bị thiếu của nó (MISSING_BY_SOURCE).
     """
     X_new = X.copy()
-    mask_http    = src == 'httpparam'
-    mask_normal  = mask_http & (y == 0)
-    mask_attack  = mask_http & (y == 1)
-
-    for row in np.where(mask_normal)[0]:
-        X_new[row, MISSING_IDX] = mean_class0
-    for row in np.where(mask_attack)[0]:
-        X_new[row, MISSING_IDX] = mean_class1
+    for source, idxs in MISSING_BY_SOURCE.items():
+        v0 = np.array([mean_class0[i] for i in idxs], dtype=X_new.dtype)
+        v1 = np.array([mean_class1[i] for i in idxs], dtype=X_new.dtype)
+        mask_src = src == source
+        for row in np.where(mask_src & (y == 0))[0]:
+            X_new[row, idxs] = v0
+        for row in np.where(mask_src & (y == 1))[0]:
+            X_new[row, idxs] = v1
     return X_new
 
 
@@ -157,7 +200,7 @@ def train_evaluate(strategy_name, X_train, X_test, y_train, y_test, src_test):
     results['overall'] = {'accuracy': acc, 'f1_macro': f1, 'auc_roc': auc}
 
     # Per-source
-    for src in ['csic', 'ecml', 'httpparam']:
+    for src in ['csic', 'ecml', 'httpparam', 'biblio']:
         mask = src_test == src
         if mask.sum() == 0: continue
         f1s  = f1_score(y_test[mask], y_pred[mask], average='macro', zero_division=0)
@@ -248,9 +291,9 @@ def main():
     print("\n" + "=" * 65)
     print("BẢNG SO SÁNH TỔNG HỢP")
     print("=" * 65)
-    header = f"{'Strategy':<30s} {'F1-Overall':>10} {'AUC':>7} {'F1-CSIC':>9} {'F1-ECML':>9} {'F1-HTTP':>9}"
+    header = f"{'Strategy':<30s} {'F1-Overall':>10} {'AUC':>7} {'F1-CSIC':>9} {'F1-ECML':>9} {'F1-HTTP':>9} {'F1-BIBL':>9}"
     print(header)
-    print("-" * 65)
+    print("-" * 75)
     for r in all_results:
         ov = r['overall']
         ps = r['per_source']
@@ -259,7 +302,8 @@ def main():
               f"{ov['auc_roc']:.4f}  "
               f"{ps.get('csic',{}).get('f1_macro',0):.4f}  "
               f"{ps.get('ecml',{}).get('f1_macro',0):.4f}  "
-              f"{ps.get('httpparam',{}).get('f1_macro',0):.4f}")
+              f"{ps.get('httpparam',{}).get('f1_macro',0):.4f}  "
+              f"{ps.get('biblio',{}).get('f1_macro',0):.4f}")
 
     print("\nMissed attacks (ECML — điểm yếu chính):")
     for r in all_results:

@@ -173,7 +173,7 @@ def make_expert(kind: str, source_hint: str = "all", random_state: int = 42):
 
     if kind == 'rf':
         base = RandomForestClassifier(
-            n_estimators=150, max_depth=20,          # 150 cây đủ cho MoE (ensemble bù nhau)
+            n_estimators=150, max_depth=30,          # 150 cây đủ cho MoE (ensemble bù nhau)
             class_weight=cw, random_state=random_state, n_jobs=-1)
 
     elif kind == 'xgb':
@@ -562,8 +562,10 @@ def evaluate_strategy(name, y_test, pred, proba, src_test):
         },
         'per_source': {}
     }
-    for src in ['csic', 'ecml', 'httpparam']:
+    for src in ['csic', 'ecml', 'httpparam', 'biblio']:
         m = src_test == src
+        if m.sum() == 0:
+            continue
         res['per_source'][src] = evaluate(src.upper(), y_test[m], pred[m], proba[m])
     return res
 
@@ -708,8 +710,8 @@ def main():
     print("BẢNG SO SÁNH — 5 CHIẾN LƯỢC")
     print(f"{'='*70}")
     print(f"{'Strategy':<26} {'F1':>7} {'AUC':>7} "
-          f"{'CSIC-F1':>8} {'ECML-F1':>8} {'HTTP-F1':>8}")
-    print("-" * 70)
+          f"{'CSIC-F1':>8} {'ECML-F1':>8} {'HTTP-F1':>8} {'BIBL-F1':>8}")
+    print("-" * 80)
     for r in all_results:
         ov = r['overall']
         ps = r['per_source']
@@ -721,6 +723,7 @@ def main():
               f"  {ps.get('csic',{}).get('f1_macro',0):.4f}"
               f"  {ps.get('ecml',{}).get('f1_macro',0):.4f}"
               f"  {ps.get('httpparam',{}).get('f1_macro',0):.4f}"
+              f"  {ps.get('biblio',{}).get('f1_macro',0):.4f}"
               f"{tag}")
 
     print(f"\nMissed attacks (ECML — thường khó nhất):")

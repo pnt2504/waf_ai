@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Review Đồ án WAF ML + Mixture of Experts</title>
+<style>
+:root{
+  --bg:#f6f8fb; --paper:#ffffff; --ink:#162033; --muted:#5f6b7a;
+  --brand:#1d4ed8; --brand2:#0f766e; --line:#d9e2ef; --soft:#eef5ff;
+  --warn:#b45309; --bad:#b91c1c; --ok:#047857; --code:#0f172a;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Segoe UI,Arial,sans-serif;line-height:1.65}
+a{color:var(--brand);text-decoration:none} a:hover{text-decoration:underline}
+.layout{display:grid;grid-template-columns:300px 1fr;min-height:100vh}
+nav{position:sticky;top:0;height:100vh;overflow:auto;background:#0f172a;color:#e2e8f0;padding:24px 18px;border-right:1px solid #0b1220}
+nav h1{font-size:18px;line-height:1.3;margin:0 0 8px;color:#fff}
+nav .sub{font-size:12px;color:#94a3b8;margin-bottom:18px}
+nav a{display:block;color:#cbd5e1;padding:8px 10px;border-radius:8px;font-size:14px}
+nav a:hover{background:#1e293b;text-decoration:none;color:#fff}
+main{max-width:1180px;padding:34px 46px 80px}
+.hero{background:linear-gradient(135deg,#ffffff,#eaf2ff);border:1px solid var(--line);border-radius:18px;padding:28px;margin-bottom:24px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
+.hero h1{margin:0 0 12px;font-size:32px;line-height:1.2}.hero p{margin:0;color:var(--muted)}
+section{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:26px;margin:22px 0;box-shadow:0 4px 16px rgba(15,23,42,.04)}
+h2{margin:0 0 16px;font-size:25px;border-bottom:2px solid var(--soft);padding-bottom:10px}
+h3{margin-top:22px;color:#1e3a8a} h4{margin-bottom:6px;color:#0f766e}
+.badge{display:inline-block;background:var(--soft);color:#1e40af;border:1px solid #bfdbfe;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;margin:2px}
+.warn{background:#fff7ed;border-left:5px solid var(--warn);padding:12px 14px;border-radius:10px;margin:14px 0}.bad{background:#fef2f2;border-left:5px solid var(--bad);padding:12px 14px;border-radius:10px;margin:14px 0}.ok{background:#ecfdf5;border-left:5px solid var(--ok);padding:12px 14px;border-radius:10px;margin:14px 0}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}th,td{border:1px solid var(--line);padding:9px 10px;vertical-align:top}th{background:#f1f5f9;text-align:left;color:#334155}tr:nth-child(even) td{background:#fbfdff}
+pre{background:var(--code);color:#e5e7eb;padding:16px;border-radius:12px;overflow:auto;font-size:13px;line-height:1.5}code{font-family:Consolas,Menlo,monospace}.inline{background:#eef2ff;color:#1e1b4b;padding:1px 5px;border-radius:5px}
+.pipeline{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:18px 0}.step{background:#fff;border:1px solid #bfdbfe;border-radius:12px;padding:12px 14px;min-width:155px;text-align:center;box-shadow:0 2px 8px rgba(30,64,175,.08)}.arrow{font-size:22px;color:#64748b}.step b{display:block;color:#1d4ed8}.small{font-size:13px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{border:1px solid var(--line);border-radius:14px;padding:16px;background:#fbfdff}.card h4{margin-top:0}
+.checklist li{margin:6px 0}.toc-note{font-size:12px;color:#94a3b8;margin-top:16px}
+@media(max-width:900px){.layout{grid-template-columns:1fr}nav{position:relative;height:auto}main{padding:20px}.grid{grid-template-columns:1fr}.arrow{display:none}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <h1>Review code đồ án WAF ML + MoE</h1>
+  <div class="sub">Bản HTML tĩnh để ôn báo cáo với giảng viên</div>
+  <a href="#overview">1. Tổng quan đồ án</a>
+  <a href="#structure">2. Cấu trúc thư mục</a>
+  <a href="#pipeline">3. Pipeline hệ thống</a>
+  <a href="#files">4. Review từng file</a>
+  <a href="#modules">5. Review module/class/hàm</a>
+  <a href="#ml">6. Mô hình Machine Learning</a>
+  <a href="#moe">7. Mixture of Experts</a>
+  <a href="#flow">8. Luồng train/evaluate/predict</a>
+  <a href="#questions">9. Câu hỏi phản biện</a>
+  <a href="#quality">10. Nhận xét và cải thiện</a>
+  <a href="#reporting">11. Văn phong báo cáo</a>
+  <div class="toc-note">Không dùng thư viện ngoài. Mở trực tiếp bằng trình duyệt.</div>
+</nav>
+<main>
+  <div class="hero">
+    <h1>Code Review Report</h1>
+    <p><b>Đề tài:</b> Nghiên cứu và xây dựng hệ thống Web Application Firewall sử dụng Machine Learning và kiến trúc Mixture of Experts để phát hiện tấn công ứng dụng web.</p>
+    <p class="small">Nguyên tắc review: chỉ dựa trên source code đã đọc; phần chưa thấy trong code được ghi rõ.</p>
+  </div>
+
+<section id="overview">
+<h2>1. Tổng quan đồ án</h2>
+<p>Project là một hệ thống kết hợp xử lý dữ liệu, huấn luyện mô hình, đánh giá mô hình và demo WAF runtime. Hệ thống nhận dữ liệu HTTP request, chuẩn hóa schema, trích xuất feature bảo mật, train mô hình Random Forest/MoE, sau đó deploy model vào FastAPI server để Nginx hỏi trước khi cho request vào backend.</p>
+<div>
+  <span class="badge">Xử lý dữ liệu</span><span class="badge">Feature extraction</span><span class="badge">Training ML</span><span class="badge">Evaluation</span><span class="badge">MoE</span><span class="badge">FastAPI WAF</span><span class="badge">Nginx demo</span>
+</div>
+<div class="ok"><b>Điểm mạnh:</b> đồ án không chỉ train model offline mà có cả pipeline demo thực tế: Client → Nginx → WAF server → Backend.</div>
+<div class="warn"><b>Lưu ý:</b> Không thấy README.md ở root project. Có nhiều entry point khác nhau, cần nói rõ script nào là pipeline chính khi báo cáo.</div>
+</section>
+
+<section id="structure">
+<h2>2. Cấu trúc thư mục/file chính</h2>
+<table>
+<tr><th>Đường dẫn</th><th>Vai trò</th><th>Ghi chú báo cáo</th></tr>
+<tr><td><code>config/keywords.py</code></td><td>Hằng số bảo mật: keyword SQLi/XSS/path traversal, extension nguy hiểm, trọng số.</td><td>Tri thức bảo mật hỗ trợ feature extraction.</td></tr>
+<tr><td><code>features/helpers.py</code></td><td>Hàm tính entropy, keyword count, header anomaly, upload file risk.</td><td>Các hàm thuần túy, dễ test độc lập.</td></tr>
+<tr><td><code>features/extractor.py</code></td><td>Chuyển HTTP request thành vector 32 feature.</td><td>Module cốt lõi nhất.</td></tr>
+<tr><td><code>model/trainer.py</code></td><td>Class <code>ModelTrainer</code> cho Random Forest cơ bản.</td><td>Pipeline baseline truyền thống.</td></tr>
+<tr><td><code>main.py</code></td><td>Entry point đơn giản train/evaluate/lưu model.</td><td>Mặc định dùng CSIC, không phải toàn bộ MoE.</td></tr>
+<tr><td><code>baseline_train.py</code></td><td>Baseline Random Forest dự kiến trên 4 dataset.</td><td>Có lỗi <code>merged = csic</code>.</td></tr>
+<tr><td><code>mfi_train.py</code></td><td>So sánh missing feature imputation.</td><td>MFI-Class-Conditional có data leakage.</td></tr>
+<tr><td><code>moe_train.py</code></td><td>MoE v1 rule-based 2 expert.</td><td>Dễ giải thích nhưng router chưa học từ data.</td></tr>
+<tr><td><code>moe_train_v2.py</code></td><td>MoE v2 với expert RF/XGB/LGBM và Logistic/MLP/Sparse gating.</td><td>Phần bám đề tài MoE nhất.</td></tr>
+<tr><td><code>test_datasets.py</code></td><td>Đánh giá offline, qua API, qua Nginx.</td><td>Chứng minh được pipeline thực tế.</td></tr>
+<tr><td><code>waf_server/app.py</code></td><td>FastAPI WAF server: load model, predict, auth_request.</td><td>Runtime của WAF.</td></tr>
+<tr><td><code>lab/nginx/waf.conf</code></td><td>Nginx auth_request integration.</td><td>Chặn/cho qua request theo WAF verdict.</td></tr>
+<tr><td><code>lab/docker-compose.yml</code></td><td>Dựng Nginx + WAF + Backend.</td><td>Dùng cho demo bảo vệ.</td></tr>
+<tr><td><code>lab/backend/app.py</code></td><td>Backend Flask demo đứng sau WAF.</td><td>Backend không tự chặn attack.</td></tr>
+<tr><td><code>convert_biblio.py</code></td><td>Convert Biblio-US17 raw log sang JSON.</td><td>Biblio thiếu header.</td></tr>
+<tr><td><code>merge_datasets.py</code></td><td>Gộp CSIC/ECML/HTTPParam.</td><td>Script chuẩn hóa schema cũ.</td></tr>
+<tr><td><code>eval_biblio.py</code></td><td>Đánh giá riêng Biblio.</td><td>Có hard-code path.</td></tr>
+<tr><td><code>waf_training_best.py</code></td><td>Script training cũ/prototype.</td><td>Duplicate logic; feature count khác extractor mới.</td></tr>
+</table>
+</section>
+
+<section id="pipeline">
+<h2>3. Pipeline hệ thống</h2>
+<h3>3.1 Pipeline huấn luyện</h3>
+<div class="pipeline">
+  <div class="step"><b>Dataset</b><span>CSIC/ECML/HTTPParam/Biblio</span></div><div class="arrow">→</div>
+  <div class="step"><b>Normalize</b><span>method, URL, payload, headers, label</span></div><div class="arrow">→</div>
+  <div class="step"><b>FeatureExtractor</b><span>32 feature số</span></div><div class="arrow">→</div>
+  <div class="step"><b>Split</b><span>train/test stratify</span></div><div class="arrow">→</div>
+  <div class="step"><b>Train</b><span>RF / MFI / MoE</span></div><div class="arrow">→</div>
+  <div class="step"><b>Evaluate</b><span>Accuracy, F1, AUC, FP/FN</span></div>
+</div>
+<h3>3.2 Pipeline runtime WAF</h3>
+<div class="pipeline">
+  <div class="step"><b>Client</b><span>HTTP request</span></div><div class="arrow">→</div>
+  <div class="step"><b>Nginx</b><span>auth_request</span></div><div class="arrow">→</div>
+  <div class="step"><b>FastAPI /auth</b><span>build entry</span></div><div class="arrow">→</div>
+  <div class="step"><b>Extract</b><span>feature vector</span></div><div class="arrow">→</div>
+  <div class="step"><b>Predict</b><span>probability</span></div><div class="arrow">→</div>
+  <div class="step"><b>Decision</b><span>200 allow / 403 block</span></div>
+</div>
+<pre><code>Client HTTP request
+  → Nginx /waf-check
+  → FastAPI WAF /auth
+  → FeatureExtractor.extract(entry)
+  → MODEL.predict_proba(X)
+  → probability >= threshold ? ATTACK : NORMAL</code></pre>
+</section>
+
+<section id="files">
+<h2>4. Review từng file code</h2>
+<h3>4.1 <code>features/extractor.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> file cốt lõi, chuyển request thành vector 32 feature.</li>
+<li><b>Class chính:</b> <code>FeatureExtractor</code>.</li>
+<li><b>Luồng:</b> lấy method/url/body/header → decode URL nhiều tầng → xác định query/body → tính keyword, entropy, header anomaly, URL penalty → trả vector.</li>
+<li><b>Liên kết:</b> mọi script train/evaluate/server đều dùng file này.</li>
+<li><b>Điểm báo cáo:</b> đây là cầu nối giữa HTTP text và ML numeric vector.</li>
+</ul>
+<pre><code>url_decoded, url_enc_depth = self._full_decode(url)
+effective_payload = self._get_effective_payload(method, url, body)
+injection_text = f"{url_decoded} {effective_payload}"</code></pre>
+<p><b>Giải thích:</b> hệ thống không chỉ nhìn body mà còn nhìn URL đã decode, giúp phát hiện payload bị encode nhiều tầng.</p>
+
+<h3>4.2 <code>config/keywords.py</code> và <code>features/helpers.py</code></h3>
+<ul>
+<li><code>keywords.py</code> chứa danh sách keyword và trọng số.</li>
+<li><code>helpers.py</code> tính entropy, đếm keyword, điểm header bất thường, extension nguy hiểm, upload file độc hại.</li>
+<li><b>Rủi ro:</b> keyword substring có thể gây false positive; code đã giảm một phần bằng boundary regex cho SQLi.</li>
+</ul>
+
+<h3>4.3 <code>baseline_train.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> train RandomForest baseline.</li>
+<li><b>Hyperparameters:</b> threshold 0.5, class weight {0:1,1:2}, 300 trees, max depth 30, test size 0.2.</li>
+<li><b>Lỗi logic:</b> code load 4 dataset nhưng gán <code>merged = csic</code>, nên thực tế chỉ train CSIC.</li>
+</ul>
+<div class="bad"><b>Cần sửa trước khi báo cáo kết quả baseline:</b> đổi thành <code>merged = csic + ecml + httpparam + biblio</code>.</div>
+
+<h3>4.4 <code>mfi_train.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> xử lý missing feature do HTTPParam/Biblio thiếu URL/header.</li>
+<li><b>Chiến lược:</b> baseline zeros, MFI-Mean, MFI-Class-Conditional.</li>
+<li><b>Lỗi/rủi ro:</b> MFI-Class-Conditional dùng <code>y_test</code> để impute test set, gây data leakage.</li>
+</ul>
+<pre><code>X_test_cc = apply_mfi_class_conditional(
+    X_test, y_test, src_test, mean_class0, mean_class1)</code></pre>
+<p><b>Giải thích:</b> khi deploy thật không biết nhãn trước, nên cách này chỉ nên xem là upper-bound/oracle nếu chưa sửa.</p>
+
+<h3>4.5 <code>moe_train.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> MoE v1 rule-based gồm 2 expert.</li>
+<li><b>Expert_Full:</b> train CSIC+ECML.</li>
+<li><b>Expert_Payload:</b> train HTTPParam.</li>
+<li><b>Router:</b> có URL/header thật thì dùng full, ngược lại payload-only.</li>
+<li><b>Predict:</b> hard routing hoặc soft weight cố định.</li>
+</ul>
+
+<h3>4.6 <code>moe_train_v2.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> MoE học thuật hơn, có expert RF/XGB/LGBM và gating Logistic/MLP/Sparse.</li>
+<li><b>Expert factory:</b> <code>make_expert()</code>.</li>
+<li><b>Gating:</b> <code>LogisticGating</code>, <code>MLPGating</code>, <code>SparseTopKGating</code>.</li>
+<li><b>MoE:</b> <code>MixtureOfExperts</code> fit/predict.</li>
+<li><b>Rủi ro:</b> <code>sample_weight</code> chưa được truyền vào <code>expert.fit()</code> trong refit.</li>
+</ul>
+<pre><code>gate_w = self.gating.predict_weights(X)
+expert_proba = np.column_stack([
+    e.predict_proba(X)[:, 1] for e in self.experts
+])
+return (gate_w * expert_proba).sum(axis=1)</code></pre>
+<p><b>Giải thích:</b> xác suất cuối cùng là tổng có trọng số giữa xác suất attack của các expert.</p>
+
+<h3>4.7 <code>waf_server/app.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> FastAPI inference server.</li>
+<li><b>Endpoint:</b> <code>/predict</code>, <code>/auth</code>, <code>/benchmark</code>, <code>/scan</code>, <code>/health</code>.</li>
+<li><b>Runtime:</b> load model bằng pickle, extract feature, predict probability, trả verdict.</li>
+<li><b>Rủi ro:</b> pickle chỉ an toàn với model tin cậy; log có thể chứa cookie/authorization/payload.</li>
+</ul>
+
+<h3>4.8 <code>test_datasets.py</code></h3>
+<ul>
+<li><b>Vai trò:</b> đánh giá model trực tiếp, qua API hoặc qua Nginx.</li>
+<li><b>Metric:</b> Accuracy, F1-macro, AUC, TP/TN/FP/FN, precision/recall attack, latency.</li>
+<li><b>Điểm báo cáo:</b> chứng minh mô hình được đánh giá cả offline và trong pipeline deploy.</li>
+</ul>
+
+<h3>4.9 <code>lab/nginx/waf.conf</code> và <code>lab/docker-compose.yml</code></h3>
+<ul>
+<li><b>Nginx:</b> dùng <code>auth_request /waf-check</code> để hỏi WAF trước khi proxy backend.</li>
+<li><b>Docker compose:</b> dựng 3 service: nginx, waf, backend.</li>
+<li><b>Lưu ý:</b> config hiện fail-open khi WAF lỗi.</li>
+</ul>
+</section>
+
+<section id="modules">
+<h2>5. Review từng module/class/hàm quan trọng</h2>
+<table>
+<tr><th>Hàm/Class</th><th>File</th><th>Mục đích</th><th>Input</th><th>Output</th><th>Cách nói khi báo cáo</th></tr>
+<tr><td><code>FeatureExtractor.extract</code></td><td><code>features/extractor.py</code></td><td>Biến HTTP request thành vector feature.</td><td>dict request</td><td>list 32 số</td><td>“Em không đưa chuỗi thô vào model mà chuyển thành đặc trưng số.”</td></tr>
+<tr><td><code>_full_decode</code></td><td><code>features/extractor.py</code></td><td>Decode URL nhiều tầng.</td><td>string URL</td><td>decoded text + depth</td><td>“Giúp bắt bypass bằng double/multi encoding.”</td></tr>
+<tr><td><code>header_anomaly_score</code></td><td><code>features/helpers.py</code></td><td>Chấm điểm header bất thường.</td><td>headers dict</td><td>integer score</td><td>“Đây là feature hỗ trợ nhận diện scanner/bot.”</td></tr>
+<tr><td><code>ModelTrainer</code></td><td><code>model/trainer.py</code></td><td>Pipeline RF cơ bản.</td><td>extractor + params</td><td>model/report</td><td>“Baseline để kiểm chứng trước khi mở rộng MoE.”</td></tr>
+<tr><td><code>compute_imputation_stats</code></td><td><code>mfi_train.py</code></td><td>Tính mean feature thiếu từ CSIC+ECML.</td><td>X_train, y_train, src_train</td><td>mean dict</td><td>“Dùng nguồn đầy đủ để bù feature thiếu.”</td></tr>
+<tr><td><code>make_expert</code></td><td><code>moe_train_v2.py</code></td><td>Tạo expert RF/XGB/LGBM.</td><td>kind</td><td>calibrated classifier</td><td>“Mỗi expert là một mô hình con.”</td></tr>
+<tr><td><code>LogisticGating</code></td><td><code>moe_train_v2.py</code></td><td>Gating tuyến tính học trọng số expert.</td><td>X, y, expert_probas</td><td>weights</td><td>“Gate quyết định expert nào đáng tin hơn.”</td></tr>
+<tr><td><code>MLPGating</code></td><td><code>moe_train_v2.py</code></td><td>Gating phi tuyến bằng neural network nhỏ.</td><td>X</td><td>weights</td><td>“Dùng khi quan hệ giữa feature và expert phức tạp.”</td></tr>
+<tr><td><code>SparseTopKGating</code></td><td><code>moe_train_v2.py</code></td><td>Chỉ chọn top K expert.</td><td>X</td><td>sparse weights</td><td>“Giảm nhiễu từ expert yếu.”</td></tr>
+<tr><td><code>MixtureOfExperts.predict_proba</code></td><td><code>moe_train_v2.py</code></td><td>Kết hợp xác suất các expert.</td><td>X</td><td>prob attack</td><td>“Output cuối = tổng trọng số × xác suất expert.”</td></tr>
+<tr><td><code>predict_entry</code></td><td><code>waf_server/app.py</code></td><td>Inference một request.</td><td>entry dict</td><td>verdict/prob/features/timing</td><td>“Lõi runtime của WAF server.”</td></tr>
+<tr><td><code>nginx_auth</code></td><td><code>waf_server/app.py</code></td><td>Endpoint cho Nginx auth_request.</td><td>Request từ Nginx</td><td>HTTP 200/403</td><td>“Nginx hỏi WAF trước khi proxy.”</td></tr>
+</table>
+</section>
+
+<section id="ml">
+<h2>6. Giải thích mô hình Machine Learning</h2>
+<div class="grid">
+<div class="card"><h4>Random Forest</h4><p>Khai báo trong <code>baseline_train.py</code>, <code>model/trainer.py</code>, <code>mfi_train.py</code>, <code>moe_train.py</code>, <code>moe_train_v2.py</code>. Input là ma trận feature; output là xác suất attack qua <code>predict_proba</code>. Tham số thường thấy: 300 cây, depth 30, class_weight để giảm bỏ lọt attack.</p></div>
+<div class="card"><h4>XGBoost / LightGBM</h4><p>Trong <code>moe_train_v2.py</code>, import optional. Nếu thiếu thư viện thì fallback sang <code>GradientBoostingClassifier</code>. Vai trò là tạo expert đa dạng trong MoE.</p></div>
+<div class="card"><h4>Logistic Regression</h4><p>Dùng làm gating trong <code>LogisticGating</code>. Đây là gate tuyến tính, dễ giải thích, học expert nào phù hợp hơn cho từng sample.</p></div>
+<div class="card"><h4>MLP</h4><p>Dùng trong <code>MLPGating</code> và Sparse gating backbone. Có khả năng học quan hệ phi tuyến giữa feature và routing expert.</p></div>
+</div>
+<h3>Metric trong code</h3>
+<ul>
+<li><b>Accuracy:</b> tỷ lệ dự đoán đúng tổng thể.</li>
+<li><b>F1-macro:</b> trung bình F1 của normal và attack, phù hợp khi dữ liệu mất cân bằng.</li>
+<li><b>AUC-ROC:</b> đo khả năng phân tách theo xác suất.</li>
+<li><b>Confusion matrix:</b> TN/FP/FN/TP; đặc biệt quan trọng là FN/missed attacks.</li>
+</ul>
+</section>
+
+<section id="moe">
+<h2>7. Giải thích Mixture of Experts</h2>
+<p>Trong code có hai mức MoE:</p>
+<ol>
+<li><b>MoE v1 (<code>moe_train.py</code>):</b> rule router chia request thành full hoặc payload-only, rồi dùng expert tương ứng.</li>
+<li><b>MoE v2 (<code>moe_train_v2.py</code>):</b> nhiều expert RF/XGB/LGBM và gating network học trọng số expert.</li>
+</ol>
+<h3>MoE v2 theo code</h3>
+<div class="pipeline">
+  <div class="step"><b>X</b><span>feature vector</span></div><div class="arrow">→</div>
+  <div class="step"><b>Experts</b><span>RF/XGB/LGBM → p1,p2,p3</span></div><div class="arrow">+</div>
+  <div class="step"><b>Gating</b><span>Logistic/MLP/Sparse → g1,g2,g3</span></div><div class="arrow">→</div>
+  <div class="step"><b>Output</b><span>Σ gi × pi</span></div>
+</div>
+<pre><code>expert_probas = np.column_stack([
+    e.predict_proba(X)[:, 1] for e in self.experts
+])
+self.gating.fit(X, y, expert_probas=expert_probas)
+gate_weights = self.gating.predict_weights(X)</code></pre>
+<div class="warn"><b>Lưu ý trung thực khi báo cáo:</b> code có ý tưởng EM-style, nhưng phần refit chưa truyền sample_weight vào expert.fit. Vì vậy nên gọi đây là prototype/implementation đơn giản của joint training.</div>
+</section>
+
+<section id="flow">
+<h2>8. Luồng train/evaluate/predict</h2>
+<h3>Train baseline</h3>
+<pre><code>Load datasets
+→ FeatureExtractor.extract từng record
+→ train_test_split(test_size=0.2, stratify=y)
+→ RandomForestClassifier.fit(X_train, y_train)
+→ predict_proba(X_test)[:,1]
+→ threshold 0.5
+→ evaluate overall + per-source</code></pre>
+<h3>Train MFI</h3>
+<pre><code>Load 4 dataset
+→ Extract features
+→ Split train/test
+→ Tính mean feature thiếu từ CSIC+ECML train
+→ Apply MFI cho HTTPParam/Biblio
+→ Train/evaluate RF cho từng chiến lược</code></pre>
+<h3>Predict runtime</h3>
+<pre><code>entry = { method, url, payload, headers }
+feats = EXTRACTOR.extract(entry)
+X = np.asarray(feats).reshape(1, -1)
+raw = MODEL.predict_proba(X)
+proba = raw[0,1] hoặc raw[0]
+is_attack = proba >= WAF_THRESHOLD</code></pre>
+</section>
+
+<section id="questions">
+<h2>9. Câu hỏi phản biện và trả lời ngắn</h2>
+<table>
+<tr><th>Câu hỏi</th><th>Trả lời gợi ý</th></tr>
+<tr><td>Vì sao chọn Random Forest?</td><td>Dữ liệu sau extractor là dạng bảng; RF dễ train, chịu được feature phi tuyến, có class_weight và feature importance.</td></tr>
+<tr><td>Vì sao cần MoE?</td><td>Các nguồn dữ liệu khác nhau: request đầy đủ URL/header và request payload-only. MoE cho phép expert chuyên biệt và gate kết hợp expert phù hợp.</td></tr>
+<tr><td>Gating network hoạt động thế nào?</td><td>Gate nhận feature X, học dựa trên performance của expert, rồi xuất trọng số cho từng expert.</td></tr>
+<tr><td>Một sample có thể dùng nhiều expert không?</td><td>Có trong MoE v2: output cuối là tổng có trọng số giữa nhiều expert; Sparse Top-K chỉ giữ top K expert.</td></tr>
+<tr><td>Vì sao cần MFI?</td><td>HTTPParam/Biblio thiếu một số trường, khiến feature URL/header thiếu hoặc bằng 0. MFI thử bù bằng thống kê từ nguồn đầy đủ.</td></tr>
+<tr><td>F1 quan trọng hơn Accuracy vì sao?</td><td>Vì bài toán bảo mật quan tâm cả false positive và false negative; Accuracy cao vẫn có thể bỏ lọt attack nếu dữ liệu mất cân bằng.</td></tr>
+<tr><td>Code phát hiện kiểu attack nào?</td><td>SQLi, XSS, path traversal/LFI, command injection, PHP injection, probing/scanner, upload file nguy hiểm theo keyword/feature trong code.</td></tr>
+<tr><td>Có phát hiện zero-day không?</td><td>Chưa đủ dữ liệu để kết luận. Code chưa có đánh giá zero-day riêng.</td></tr>
+<tr><td>Điểm yếu hiện tại?</td><td>Baseline có lỗi merge, MFI có leakage, MoE weighted refit chưa hoàn chỉnh, docs feature count chưa đồng nhất, log có thể chứa dữ liệu nhạy cảm.</td></tr>
+<tr><td>WAF lỗi thì hệ thống xử lý sao?</td><td>Nginx config hiện fail-open: WAF lỗi thì request vẫn qua backend. Đây là trade-off availability/security.</td></tr>
+</table>
+</section>
+
+<section id="quality">
+<h2>10. Nhận xét chất lượng code và cải thiện</h2>
+<h3>Đánh giá chất lượng</h3>
+<ul class="checklist">
+<li><b>Dễ hiểu:</b> khá dễ hiểu vì comment tiếng Việt nhiều và chia file tương đối rõ.</li>
+<li><b>Chia module:</b> tốt ở phần config/helpers/extractor/server; nhưng load dataset bị lặp.</li>
+<li><b>Lặp code:</b> có, đặc biệt normalize dataset trong baseline/MFI/MoE/test.</li>
+<li><b>Lỗi logic:</b> baseline chỉ dùng CSIC; MFI class-conditional leakage.</li>
+<li><b>Mất cân bằng dữ liệu:</b> có xử lý bằng class_weight và metric F1/recall.</li>
+<li><b>Chưa đủ thuyết phục:</b> chưa thấy unit test chính thức, chưa thấy đánh giá zero-day/adversarial, MoE training còn prototype.</li>
+</ul>
+<h3>Cải thiện nhỏ</h3>
+<ol><li>Sửa <code>baseline_train.py</code>.</li><li>Cập nhật 27 → 32 features trong docs/comment.</li><li>Thêm README root.</li><li>Chọn một model chính khi demo.</li><li>Không trình bày MFI-Class-Conditional như deploy thực tế nếu chưa sửa.</li></ol>
+<h3>Cải thiện trung bình</h3>
+<ol><li>Tách <code>data_loader.py</code>.</li><li>Tách <code>metrics.py</code>.</li><li>Thêm unit test cho extractor.</li><li>Mask cookie/authorization trong log.</li><li>Gộp/xóa duplicate <code>lab/waf_server</code> nếu không dùng.</li></ol>
+<h3>Cải thiện lớn</h3>
+<ol><li>Hoàn thiện weighted refit trong MoE.</li><li>Thêm validation/cross-validation chọn threshold.</li><li>Đánh giá generalization trên dataset chưa train.</li><li>Thêm model registry/versioning để tránh mismatch feature.</li><li>Thêm dashboard giám sát WAF.</li></ol>
+</section>
+
+<section id="reporting">
+<h2>11. Đoạn giải thích dùng trong báo cáo/thuyết trình</h2>
+<p>Trong hệ thống, dữ liệu HTTP request ban đầu được chuẩn hóa về cùng một cấu trúc gồm method, URL, payload, headers và nhãn. Do các bộ dữ liệu có mức độ đầy đủ khác nhau, ví dụ HTTPParam thiếu URL và header, hệ thống bổ sung các trường mặc định và lưu lại nguồn dữ liệu để đánh giá riêng theo từng dataset.</p>
+<p>Sau khi chuẩn hóa, mỗi request được đưa vào module trích xuất đặc trưng. Module này phân tích query string, body, URL đã decode nhiều tầng và HTTP headers để tạo ra vector đặc trưng số. Các đặc trưng bao gồm độ dài payload, tỷ lệ ký tự đặc biệt, entropy, số lượng từ khóa SQL Injection, XSS, path traversal, command injection, dấu hiệu upload file nguy hiểm, điểm bất thường của header và các đặc trưng liên quan đến URL encoding.</p>
+<p>Vector đặc trưng sau đó được dùng để huấn luyện các mô hình học máy. Baseline của hệ thống là Random Forest. Để xử lý sự khác biệt giữa các nguồn dữ liệu, đồ án thử nghiệm Missing Feature Imputation. Đối với kiến trúc Mixture of Experts, hệ thống xây dựng nhiều expert khác nhau, mỗi expert đưa ra xác suất request là tấn công, còn gating network sinh trọng số cho từng expert. Xác suất cuối cùng được tính bằng tổng có trọng số giữa xác suất của các expert.</p>
+<p>Trong phần demo triển khai, model đã huấn luyện được lưu thành file <code>.pkl</code> và được FastAPI WAF server load khi khởi động. Nginx sử dụng <code>auth_request</code> để gửi subrequest đến WAF server trước khi chuyển request đến backend. Nếu WAF trả về HTTP 403, Nginx chặn request; nếu trả về HTTP 200, request được proxy đến backend.</p>
+<div class="bad"><b>Cần nhớ khi bị hỏi:</b> nói trung thực các hạn chế trong code: baseline merge bug, MFI leakage, MoE refit chưa weighted hoàn chỉnh, fail-open, logging dữ liệu nhạy cảm.</div>
+</section>
+
+</main>
+</div>
+</body>
+</html>
